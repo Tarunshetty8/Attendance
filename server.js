@@ -92,12 +92,41 @@ app.post('/attendance/mark', (req, res) => {
             if (results.length > 0) {
                 processAttendance();
             } else {
-                res.status(403).json({ success: false, message: 'Invalid Office WiFi' });
+                // Helpful for testing: Return the BSSID so user knows what to add to DB
+                res.status(403).json({ success: false, message: `Invalid Office WiFi. Your BSSID is: ${wifi_bssid}` });
             }
         });
     } else {
         // Allow in mock mode
         processAttendance();
+    }
+    // ... (End of attendance/mark handler)
+});
+
+// Admin: Create New User
+app.post('/admin/users', (req, res) => {
+    const { username, password, full_name, hourly_rate } = req.body;
+
+    // Simple validation
+    if (!username || !password || !full_name) {
+        return res.status(400).json({ success: false, message: 'Missing fields' });
+    }
+
+    const query = 'INSERT INTO users (username, password_hash, role, full_name, hourly_rate) VALUES (?, ?, "employee", ?, ?)';
+
+    if (db.state !== 'disconnected') {
+        db.query(query, [username, password, full_name, hourly_rate || 0], (err, result) => {
+            if (err) {
+                // Check if duplicate entry
+                if (err.code === 'ER_DUP_ENTRY') {
+                    return res.status(400).json({ success: false, message: 'Username already exists' });
+                }
+                return res.status(500).json({ error: err });
+            }
+            res.json({ success: true, message: 'Employee created successfully', id: result.insertId });
+        });
+    } else {
+        res.json({ success: true, message: 'MOCK: Employee created', id: 999 });
     }
 });
 
@@ -151,5 +180,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
-
-
