@@ -9,8 +9,8 @@ app.use(bodyParser.json());
 
 // Database Configuration
 const db = mysql.createConnection({
-    host: 'mysql.gb.stackcp.net', // Updated Hostname (Note: stackcp.com usually maps to stackcp.net for DBs, but using provided base)
-    port: 40762,                   // Explicit Port
+    host: 'mysql.gb.stackcp.com', // Updated Hostname
+    port: 40762,
     user: 'Attendance-095a',
     password: 'S@i85t@run',
     database: 'tvs_attendance-3133319d91'
@@ -18,7 +18,7 @@ const db = mysql.createConnection({
 
 db.connect(err => {
     if (err) {
-        console.error('Database connection failed:', err.stack);
+        console.error('Database connection failed:', err); // Log full error object
         console.log('Running in MOCK mode (No DB connection). Data will not be saved.');
     } else {
         console.log('Connected to MySQL database.');
@@ -32,15 +32,20 @@ app.post('/login', (req, res) => {
     const { username, password } = req.body;
     const query = 'SELECT * FROM users WHERE username = ? AND password_hash = ?';
 
-    // Using Mock for demo if DB fails
+    // Check connection state - simple check if we are in "mock" mode effectively
+    // Note: db.state might be 'authenticated' or 'connected'. 'disconnected' is definite failure.
     if (db.state === 'disconnected') {
+        console.log('Using Mock Login (DB Disconnected)');
         if (username === 'admin' && password === 'admin123') return res.json({ success: true, role: 'admin', token: 'mock-admin' });
         if (username === 'emp01' && password === 'emp123') return res.json({ success: true, role: 'employee', token: 'mock-emp' });
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     db.query(query, [username, password], (err, results) => {
-        if (err) return res.status(500).json({ error: err });
+        if (err) {
+            console.error('Login Error:', err); // Detailed logging
+            return res.status(500).json({ error: err.message || 'Database error' });
+        }
         if (results.length > 0) {
             res.json({ success: true, role: results[0].role, user: results[0] });
         } else {
@@ -67,7 +72,10 @@ app.post('/attendance/mark', (req, res) => {
             `;
             if (db.state !== 'disconnected') {
                 db.query(query, [user_id, today], (err) => {
-                    if (err) return res.status(500).json({ error: err });
+                    if (err) {
+                        console.error('Attendance Mark Error:', err);
+                        return res.status(500).json({ error: err.message });
+                    }
                     res.json({ success: true, message: 'Attendance marked: Present' });
                 });
             } else {
@@ -77,7 +85,10 @@ app.post('/attendance/mark', (req, res) => {
             const query = `UPDATE attendance SET exit_time = NOW() WHERE user_id = ? AND date = ?`;
             if (db.state !== 'disconnected') {
                 db.query(query, [user_id, today], (err) => {
-                    if (err) return res.status(500).json({ error: err });
+                    if (err) {
+                        console.error('Attendance Exit Error:', err);
+                        return res.status(500).json({ error: err.message });
+                    }
                     res.json({ success: true, message: 'Attendance updated: Exit time logged' });
                 });
             } else {
@@ -88,7 +99,10 @@ app.post('/attendance/mark', (req, res) => {
 
     if (db.state !== 'disconnected') {
         db.query(checkWifi, [wifi_bssid], (err, results) => {
-            if (err) return res.status(500).json({ error: err });
+            if (err) {
+                console.error('WiFi Check Error:', err);
+                return res.status(500).json({ error: err.message });
+            }
             if (results.length > 0) {
                 processAttendance();
             } else {
@@ -100,7 +114,6 @@ app.post('/attendance/mark', (req, res) => {
         // Allow in mock mode
         processAttendance();
     }
-    // ... (End of attendance/mark handler)
 });
 
 // Admin: Create New User
@@ -121,7 +134,8 @@ app.post('/admin/users', (req, res) => {
                 if (err.code === 'ER_DUP_ENTRY') {
                     return res.status(400).json({ success: false, message: 'Username already exists' });
                 }
-                return res.status(500).json({ error: err });
+                console.error('Create User Error:', err);
+                return res.status(500).json({ error: err.message });
             }
             res.json({ success: true, message: 'Employee created successfully', id: result.insertId });
         });
@@ -140,7 +154,10 @@ app.get('/admin/attendance', (req, res) => {
     `;
     if (db.state !== 'disconnected') {
         db.query(query, (err, results) => {
-            if (err) return res.status(500).json({ error: err });
+            if (err) {
+                console.error('View Attendance Error:', err);
+                return res.status(500).json({ error: err.message });
+            }
             res.json(results);
         });
     } else {
@@ -165,7 +182,10 @@ app.get('/admin/payroll', (req, res) => {
     `;
     if (db.state !== 'disconnected') {
         db.query(query, (err, results) => {
-            if (err) return res.status(500).json({ error: err });
+            if (err) {
+                console.error('Payroll Error:', err);
+                return res.status(500).json({ error: err.message });
+            }
             res.json(results);
         });
     } else {
