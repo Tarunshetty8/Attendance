@@ -122,11 +122,8 @@ app.post('/attendance/mark', (req, res) => {
     // If you want to strictly enforce IP:
     if (!isAllowedHardcoded) {
         console.warn(`Blocked attendance attempt from unauthorized IP: ${clientIp}`);
-        // UNCOMMENT THE RETURN BELOW to enforce strict IP checking once you know your IP
-        // return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
-
-        // For now, let's LOG IT and ALLOW IT so you can see your IP in the logs
-        console.log("WARNING: IP not in whitelist, but allowing for initial setup.");
+        // STRICT IP ENFORCEMENT:
+        return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
     }
 
     const today = new Date().toISOString().split('T')[0];
