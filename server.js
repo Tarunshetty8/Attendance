@@ -90,7 +90,7 @@ app.post('/attendance/mark', (req, res) => {
     const ALLOWED_IPS = [
         '::1',               // Localhost
         '127.0.0.1',         // Localhost
-        '203.0.113.1'        // EXAMPLE OFFICE IP (Generic Placeholder)
+        '103.168.82.126'     // Office IP
     ];
 
     const processMockAttendance = (isValidIp) => {
