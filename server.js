@@ -179,16 +179,9 @@ app.post('/attendance/sync', (req, res) => {
             });
         }
 
-        db.query(query, [user_id, today], (err) => {
-            if (err) {
-                console.error('Db Error (Absent):', err);
-                return res.status(500).json({ success: false, message: 'DB Error' });
-            }
-            res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: `Invalid Network. Server sees: ${clientIp}` });
-        });
-    }
-    });
-});
+
+    }); // Closing db.query device check
+}); // Closing app.post('/attendance/sync')
 
 // Logout
 app.post('/attendance/logout', (req, res) => {
