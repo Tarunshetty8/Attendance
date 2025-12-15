@@ -14,57 +14,32 @@ const dbConfig = {
     user: 'Attendance-095a',
     password: 'S@i85t@run',
     database: 'tvs_attendance-3133319d91',
-    connectTimeout: 10000 // 10s timeout
+    connectTimeout: 10000, // 10s timeout
+    connectionLimit: 10,
+    queueLimit: 0
 };
 
-let db;
-let isDbConnected = false;
+// Use Connection Pool for stability
+const db = mysql.createPool(dbConfig);
+const isDbConnected = true; // Pool is always "connected" (manages itself)
 
-function handleDisconnect() {
-    db = mysql.createConnection(dbConfig);
+db.on('connection', (connection) => {
+    console.log('DB Connection acquired');
+});
 
-    db.connect(err => {
-        if (err) {
-            console.error('Database connection failed:', err.message);
-            console.log('Running in MOCK mode (No DB connection). Data will not be saved.');
-            isDbConnected = false;
-        } else {
-            console.log('Connected to MySQL database.');
-            isDbConnected = true;
-        }
-    });
+db.on('enqueue', () => {
+    console.log('Waiting for available connection slot');
+});
 
-    db.on('error', err => {
-        console.error('Database error:', err);
-        if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
-            console.log('Reconnecting to Database...');
-            isDbConnected = false;
-            handleDisconnect();
-        } else {
-            // throw err; // Don't crash server on DB error
-        }
-    });
-}
-
-// Keep-Alive mechanism (Ping DB every 1 hour)
-setInterval(() => {
-    if (isDbConnected && db) {
-        db.query('SELECT 1', (err) => {
-            if (err) {
-                console.error('Keep-Alive Failed:', err.message);
-                isDbConnected = false;
-                handleDisconnect(); // Force reconnect
-            } else {
-                console.log('Keep-Alive: DB Connection Active');
-            }
-        });
+// Test Connection
+db.getConnection((err, connection) => {
+    if (err) {
+        console.error('Initial DB Connection Failed:', err.message);
     } else {
-        console.log('Keep-Alive: Attempting Reconnect...');
-        handleDisconnect();
+        console.log('Connected to MySQL via Pool.');
+        connection.release();
     }
-}, 3600000); // 1 hour
-
-handleDisconnect();
+});
 
 // --- API Endpoints ---
 
