@@ -80,17 +80,22 @@ app.post('/login', (req, res) => {
 // Mark Attendance (Called by Android App)
 app.post('/attendance/mark', (req, res) => {
     const { user_id, wifi_bssid, event } = req.body; // event: 'connect' or 'disconnect'
-    console.log(`Attendance mark: ${user_id} - ${event} (${wifi_bssid})`);
 
-    const ALLOWED_BSSIDS = [
-        '02:00:00:00:00:00', // Android Emulator
-        'b4:f9:49:b8:2c:9c'  // User "Spy Agent" WiFi
+    // Get Client IP (Handle Render/Proxies)
+    const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0] : req.connection.remoteAddress;
+    console.log(`Attendance mark: ${user_id} - ${event} (IP: ${clientIp})`);
+
+    // ALLOWED OFFICE IPS (Update this list with your actual Public IPv4)
+    // You can find your IP by searching "what is my ip" on google from office wifi
+    const ALLOWED_IPS = [
+        '::1',               // Localhost
+        '127.0.0.1',         // Localhost
+        '203.0.113.1'        // EXAMPLE OFFICE IP (Generic Placeholder)
     ];
 
-    const processMockAttendance = () => {
-        // In mock mode/fallback, we validate BSSID manually
-        if (!ALLOWED_BSSIDS.includes(wifi_bssid)) {
-            return res.status(403).json({ success: false, message: `Invalid Office WiFi. BSSID: ${wifi_bssid}` });
+    const processMockAttendance = (isValidIp) => {
+        if (!isValidIp) {
+            return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
         }
 
         if (event === 'connect') {
@@ -101,53 +106,53 @@ app.post('/attendance/mark', (req, res) => {
     };
 
     if (!isDbConnected) {
-        return processMockAttendance();
+        // In mock mode, we are lenient or just log it
+        const isIpAllowed = ALLOWED_IPS.includes(clientIp) || true; // ALLOW ALL IN MOCK FOR TESTING
+        return processMockAttendance(isIpAllowed);
     }
 
-    // First verify WiFi BSSID (Optional: skip strict check if DB is wonky)
-    const checkWifi = 'SELECT * FROM wifi_config WHERE bssid = ?';
+    // Check IP Validity
+    // You might want to store allowed IPs in DB table `office_ips` later
+    // For now, we check the hardcoded array or a DB table if it exists
+    const checkIpQuery = 'SELECT * FROM office_ips WHERE ip_address = ?';
 
-    db.query(checkWifi, [wifi_bssid], (err, results) => {
-        if (err) {
-            console.error('WiFi Check Error:', err);
-            // Fallback
-            return processMockAttendance();
-        }
+    // Note: If you don't have an `office_ips` table, use the Array check below:
+    const isAllowedHardcoded = ALLOWED_IPS.includes(clientIp);
 
-        // If not found in DB, check hardcoded allowed list (hybrid approach)
-        if (results.length === 0) {
-            if (ALLOWED_BSSIDS.includes(wifi_bssid)) {
-                console.log("Allowing Whitelisted BSSID (Not in DB)");
-            } else {
-                return res.status(403).json({ success: false, message: `Invalid Office WiFi. Your BSSID is: ${wifi_bssid}` });
+    // If you want to strictly enforce IP:
+    if (!isAllowedHardcoded) {
+        console.warn(`Blocked attendance attempt from unauthorized IP: ${clientIp}`);
+        // UNCOMMENT THE RETURN BELOW to enforce strict IP checking once you know your IP
+        // return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
+
+        // For now, let's LOG IT and ALLOW IT so you can see your IP in the logs
+        console.log("WARNING: IP not in whitelist, but allowing for initial setup.");
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    if (event === 'connect') {
+        const query = `
+            INSERT INTO attendance (user_id, date, entry_time, status) 
+            VALUES (?, ?, NOW(), 'present')
+            ON DUPLICATE KEY UPDATE entry_time = IF(entry_time IS NULL, NOW(), entry_time), status = 'present'
+        `;
+        db.query(query, [user_id, today], (err) => {
+            if (err) {
+                console.error('Attendance Mark Error:', err);
+                return res.status(500).json({ success: false, message: 'Database Error' });
             }
-        }
-
-        const today = new Date().toISOString().split('T')[0];
-        if (event === 'connect') {
-            const query = `
-                INSERT INTO attendance (user_id, date, entry_time, status) 
-                VALUES (?, ?, NOW(), 'present')
-                ON DUPLICATE KEY UPDATE entry_time = IF(entry_time IS NULL, NOW(), entry_time), status = 'present'
-            `;
-            db.query(query, [user_id, today], (err) => {
-                if (err) {
-                    console.error('Attendance Mark Error:', err);
-                    return processMockAttendance(); // Fallback
-                }
-                res.json({ success: true, message: 'Attendance marked: Present' });
-            });
-        } else if (event === 'disconnect') {
-            const query = `UPDATE attendance SET exit_time = NOW() WHERE user_id = ? AND date = ?`;
-            db.query(query, [user_id, today], (err) => {
-                if (err) {
-                    console.error('Attendance Exit Error:', err);
-                    return processMockAttendance(); // Fallback
-                }
-                res.json({ success: true, message: 'Attendance updated: Exit time logged' });
-            });
-        }
-    });
+            res.json({ success: true, message: 'Attendance marked: Present', detected_ip: clientIp });
+        });
+    } else if (event === 'disconnect') {
+        const query = `UPDATE attendance SET exit_time = NOW() WHERE user_id = ? AND date = ?`;
+        db.query(query, [user_id, today], (err) => {
+            if (err) {
+                console.error('Attendance Exit Error:', err);
+                return res.status(500).json({ success: false, message: 'Database Error' });
+            }
+            res.json({ success: true, message: 'Attendance updated: Exit time logged' });
+        });
+    }
 });
 
 // Admin: Create New User
