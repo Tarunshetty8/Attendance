@@ -91,8 +91,11 @@ app.post('/attendance/sync', (req, res) => {
     // Check if Device ID matches
     const deviceCheckQuery = 'SELECT device_id FROM users WHERE id = ?';
     db.query(deviceCheckQuery, [user_id], (err, results) => {
-        if (err || results.length === 0) {
-            return res.json({ success: false, status: 'ERROR', message: 'User verification failed' });
+        if (err) {
+            return res.json({ success: false, status: 'ERROR', message: `DB Error: ${err.message}` });
+        }
+        if (results.length === 0) {
+            return res.json({ success: false, status: 'ERROR', message: 'User not found' });
         }
 
         const storedDeviceId = results[0].device_id;
