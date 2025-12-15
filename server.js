@@ -89,11 +89,11 @@ app.post('/attendance/sync', (req, res) => {
     // 2. Configuration
     const ALLOWED_IPS = [
         '::1',
-        '127.0.0.1',
-        '103.168.82.124'     // Office IP
+        '127.0.0.1'
     ];
 
-    const isIpAllowed = ALLOWED_IPS.includes(clientIp);
+    // Allow Localhost OR Office Subnet (103.168.82.xxx)
+    const isIpAllowed = ALLOWED_IPS.includes(clientIp) || clientIp.startsWith('103.168.82.');
 
     // Mock Mode Support
     if (!isDbConnected) {
