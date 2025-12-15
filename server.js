@@ -90,7 +90,7 @@ app.post('/attendance/sync', (req, res) => {
     const ALLOWED_IPS = [
         '::1',
         '127.0.0.1',
-        '103.168.82.126'     // Office IP
+        '103.168.82.124'     // Office IP
     ];
 
     const isIpAllowed = ALLOWED_IPS.includes(clientIp);
