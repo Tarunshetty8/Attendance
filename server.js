@@ -36,14 +36,33 @@ function handleDisconnect() {
 
     db.on('error', err => {
         console.error('Database error:', err);
-        if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
+            console.log('Reconnecting to Database...');
             isDbConnected = false;
-            // handleDisconnect(); // Optional: Auto-reconnect
+            handleDisconnect();
         } else {
-            // throw err;
+            // throw err; // Don't crash server on DB error
         }
     });
 }
+
+// Keep-Alive mechanism (Ping DB every 1 hour)
+setInterval(() => {
+    if (isDbConnected && db) {
+        db.query('SELECT 1', (err) => {
+            if (err) {
+                console.error('Keep-Alive Failed:', err.message);
+                isDbConnected = false;
+                handleDisconnect(); // Force reconnect
+            } else {
+                console.log('Keep-Alive: DB Connection Active');
+            }
+        });
+    } else {
+        console.log('Keep-Alive: Attempting Reconnect...');
+        handleDisconnect();
+    }
+}, 3600000); // 1 hour
 
 handleDisconnect();
 
