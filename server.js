@@ -130,7 +130,8 @@ app.post('/attendance/sync', (req, res) => {
                 console.error('Db Error (Absent):', err);
                 return res.status(500).json({ success: false, message: 'DB Error' });
             }
-            res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: 'Connect to Office WiFi' });
+            // VERBOSE ERROR FOR DEBUGGING
+            res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: `Invalid Network. Server sees: ${clientIp}` });
         });
     }
 });
