@@ -121,9 +121,16 @@ app.post('/attendance/mark', (req, res) => {
 
     // If you want to strictly enforce IP:
     if (!isAllowedHardcoded) {
-        console.warn(`Blocked attendance attempt from unauthorized IP: ${clientIp}`);
-        // STRICT IP ENFORCEMENT:
-        return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
+        // EXCEPTION: Allow 'disconnect' event to pass through from ANY IP.
+        // This ensures that when a user leaves the WiFi range (switches to 4G), 
+        // the app can still successfully tell the server "I disconnected" to log the exit time.
+        if (event === 'disconnect') {
+            console.log(`Allowing 'disconnect' event from non-whitelisted IP: ${clientIp}`);
+        } else {
+            console.warn(`Blocked attendance attempt from unauthorized IP: ${clientIp}`);
+            // STRICT IP ENFORCEMENT:
+            return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
+        }
     }
 
     const today = new Date().toISOString().split('T')[0];
