@@ -82,7 +82,17 @@ app.post('/attendance/mark', (req, res) => {
     const { user_id, wifi_bssid, event } = req.body; // event: 'connect' or 'disconnect'
     console.log(`Attendance mark: ${user_id} - ${event} (${wifi_bssid})`);
 
+    const ALLOWED_BSSIDS = [
+        '02:00:00:00:00:00', // Android Emulator
+        'b4:f9:49:b8:2c:9c'  // User "Spy Agent" WiFi
+    ];
+
     const processMockAttendance = () => {
+        // In mock mode/fallback, we validate BSSID manually
+        if (!ALLOWED_BSSIDS.includes(wifi_bssid)) {
+            return res.status(403).json({ success: false, message: `Invalid Office WiFi. BSSID: ${wifi_bssid}` });
+        }
+
         if (event === 'connect') {
             res.json({ success: true, message: 'MOCK: Attendance marked: Present' });
         } else {
@@ -104,12 +114,10 @@ app.post('/attendance/mark', (req, res) => {
             return processMockAttendance();
         }
 
-        // Note: For this fix, we are lenient. If WiFi not found, we still might allow or reject. 
-        // Let's reject to simulate real security.
+        // If not found in DB, check hardcoded allowed list (hybrid approach)
         if (results.length === 0) {
-            // If using emulator, BSSID might be '02:00:00:00:00:00'
-            if (wifi_bssid === '02:00:00:00:00:00') { // Android Emulator Default
-                console.log("Allowing Emulator BSSID");
+            if (ALLOWED_BSSIDS.includes(wifi_bssid)) {
+                console.log("Allowing Whitelisted BSSID (Not in DB)");
             } else {
                 return res.status(403).json({ success: false, message: `Invalid Office WiFi. Your BSSID is: ${wifi_bssid}` });
             }

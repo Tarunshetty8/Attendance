@@ -36,4 +36,5 @@ INSERT INTO users (username, password_hash, role, full_name, hourly_rate) VALUES
 
 -- Seed WiFi Config
 INSERT INTO wifi_config (ssid, bssid, description) VALUES 
-('OfficeWifi', '00:11:22:33:44:55', 'Main Office WiFi');
+('OfficeWifi', '00:11:22:33:44:55', 'Main Office WiFi'),
+('Spy Agent', 'b4:f9:49:b8:2c:9c', 'User Office WiFi');
