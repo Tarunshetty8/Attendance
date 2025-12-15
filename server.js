@@ -78,83 +78,59 @@ app.post('/login', (req, res) => {
 });
 
 // Mark Attendance (Called by Android App)
-app.post('/attendance/mark', (req, res) => {
-    const { user_id, wifi_bssid, event } = req.body; // event: 'connect' or 'disconnect'
+// Sync Attendance (New State-Sync Logic)
+app.post('/attendance/sync', (req, res) => {
+    const { user_id } = req.body;
 
-    // Get Client IP (Handle Render/Proxies)
+    // 1. Detect IP
     const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0] : req.connection.remoteAddress;
-    console.log(`Attendance mark: ${user_id} - ${event} (IP: ${clientIp})`);
+    console.log(`Sync Request: User ${user_id} | IP: ${clientIp}`);
 
-    // ALLOWED OFFICE IPS (Update this list with your actual Public IPv4)
-    // You can find your IP by searching "what is my ip" on google from office wifi
+    // 2. Configuration
     const ALLOWED_IPS = [
-        '::1',               // Localhost
-        '127.0.0.1',         // Localhost
+        '::1',
+        '127.0.0.1',
         '103.168.82.126'     // Office IP
     ];
 
-    const processMockAttendance = (isValidIp) => {
-        if (!isValidIp) {
-            return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
-        }
+    const isIpAllowed = ALLOWED_IPS.includes(clientIp);
 
-        if (event === 'connect') {
-            res.json({ success: true, message: 'MOCK: Attendance marked: Present' });
-        } else {
-            res.json({ success: true, message: 'MOCK: Attendance updated: Exit time logged' });
-        }
-    };
-
+    // Mock Mode Support
     if (!isDbConnected) {
-        // In mock mode, we are lenient or just log it
-        const isIpAllowed = ALLOWED_IPS.includes(clientIp) || true; // ALLOW ALL IN MOCK FOR TESTING
-        return processMockAttendance(isIpAllowed);
-    }
-
-    // Check IP Validity
-    // You might want to store allowed IPs in DB table `office_ips` later
-    // For now, we check the hardcoded array or a DB table if it exists
-    const checkIpQuery = 'SELECT * FROM office_ips WHERE ip_address = ?';
-
-    // Note: If you don't have an `office_ips` table, use the Array check below:
-    const isAllowedHardcoded = ALLOWED_IPS.includes(clientIp);
-
-    // If you want to strictly enforce IP:
-    if (!isAllowedHardcoded) {
-        // EXCEPTION: Allow 'disconnect' event to pass through from ANY IP.
-        // This ensures that when a user leaves the WiFi range (switches to 4G), 
-        // the app can still successfully tell the server "I disconnected" to log the exit time.
-        if (event === 'disconnect') {
-            console.log(`Allowing 'disconnect' event from non-whitelisted IP: ${clientIp}`);
-        } else {
-            console.warn(`Blocked attendance attempt from unauthorized IP: ${clientIp}`);
-            // STRICT IP ENFORCEMENT:
-            return res.status(403).json({ success: false, message: `Invalid Network. Your IP: ${clientIp}` });
-        }
+        if (isIpAllowed) return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+        return res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: 'Invalid Network' });
     }
 
     const today = new Date().toISOString().split('T')[0];
-    if (event === 'connect') {
+
+    if (isIpAllowed) {
+        // --- LOGIC: USER IS PRESENT ---
+        // Insert entry if not exists. If exists, ensure status is present.
         const query = `
             INSERT INTO attendance (user_id, date, entry_time, status) 
             VALUES (?, ?, NOW(), 'present')
-            ON DUPLICATE KEY UPDATE entry_time = IF(entry_time IS NULL, NOW(), entry_time), status = 'present'
-        `;
+            ON DUPLICATE KEY UPDATE status = 'present' 
+        `; // We don't overwrite entry_time to keep the first login of the day.
+
         db.query(query, [user_id, today], (err) => {
             if (err) {
-                console.error('Attendance Mark Error:', err);
-                return res.status(500).json({ success: false, message: 'Database Error' });
+                console.error('Db Error (Present):', err);
+                return res.status(500).json({ success: false, message: 'DB Error' });
             }
-            res.json({ success: true, message: 'Attendance marked: Present', detected_ip: clientIp });
+            res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
         });
-    } else if (event === 'disconnect') {
-        const query = `UPDATE attendance SET exit_time = NOW() WHERE user_id = ? AND date = ?`;
+
+    } else {
+        // --- LOGIC: USER IS ABSENT (Invalid Network) ---
+        // If they had an open session, close it (mark exit time).
+        const query = `UPDATE attendance SET exit_time = NOW() WHERE user_id = ? AND date = ? AND status = 'present'`;
+
         db.query(query, [user_id, today], (err) => {
             if (err) {
-                console.error('Attendance Exit Error:', err);
-                return res.status(500).json({ success: false, message: 'Database Error' });
+                console.error('Db Error (Absent):', err);
+                return res.status(500).json({ success: false, message: 'DB Error' });
             }
-            res.json({ success: true, message: 'Attendance updated: Exit time logged' });
+            res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: 'Connect to Office WiFi' });
         });
     }
 });
