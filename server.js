@@ -144,36 +144,49 @@ app.post('/attendance/sync', (req, res) => {
 
         if (isIpAllowed) {
             // --- LOGIC: USER IS PRESENT ---
-            // Insert entry if not exists. If exists, ensure status is present.
-            const query = `
-                INSERT INTO attendance (user_id, date, entry_time, status) 
-                VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')
-                ON DUPLICATE KEY UPDATE status = 'present' 
-            `;
+            // Check the LATEST record for today
+            const checkQuery = `SELECT id, status FROM attendance WHERE user_id = ? AND date = ? ORDER BY entry_time DESC LIMIT 1`;
 
-            db.query(query, [user_id, today], (err) => {
-                if (err) {
-                    console.error('Db Error (Present):', err);
-                    return res.status(500).json({ success: false, message: 'DB Error' });
+            db.query(checkQuery, [user_id, today], (err, results) => {
+                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
+
+                const lastRecord = results.length > 0 ? results[0] : null;
+
+                if (!lastRecord || lastRecord.status === 'absent') {
+                    // NEW SESSION: Insert new row
+                    const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
+                    db.query(insertQuery, [user_id, today], (err) => {
+                        if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
+                        res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                    });
+                } else {
+                    // EXISTING SESSION: Already present, Just OK (Heartbeat)
+                    // Optionally update a 'last_seen' column if you had one, but for now just confirm logic.
+                    res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
                 }
-                res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
             });
 
         } else {
             // --- LOGIC: USER IS ABSENT (Invalid Network) ---
-            // If they had an open session, close it (mark exit time).
-            // --- LOGIC: USER IS ABSENT (Invalid Network) ---
-            // If they had an open session, close it (mark exit time).
-            const query = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) WHERE user_id = ? AND date = ? AND status = 'present'`;
+            // If they have an Open Session ('present'), Close it.
+            const query = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), status = 'absent' WHERE user_id = ? AND date = ? AND status = 'present'`;
 
             db.query(query, [user_id, today], (err) => {
                 if (err) {
-                    console.error('Db Error (Absent):', err);
-                    return res.status(500).json({ success: false, message: 'DB Error' });
+                    // ... error handling
                 }
-                res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: `Invalid Network. Server sees: ${clientIp}` });
+                res.json({ success: true, status: 'ABSENT', message: 'Invalid Network', detected_ip: clientIp });
             });
         }
+
+        db.query(query, [user_id, today], (err) => {
+            if (err) {
+                console.error('Db Error (Absent):', err);
+                return res.status(500).json({ success: false, message: 'DB Error' });
+            }
+            res.json({ success: true, status: 'ABSENT', detected_ip: clientIp, message: `Invalid Network. Server sees: ${clientIp}` });
+        });
+    }
     });
 });
 
@@ -187,8 +200,8 @@ app.post('/attendance/logout', (req, res) => {
     todayDate.setMinutes(todayDate.getMinutes() + 30);
     const today = todayDate.toISOString().split('T')[0];
 
-    // 1. Mark Absent (Exit Time)
-    const updateAttendance = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) WHERE user_id = ? AND date = ?`;
+    // 1. Mark Absent (Exit Time) for the latest open session
+    const updateAttendance = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), status = 'absent' WHERE user_id = ? AND date = ? AND status = 'present'`;
     db.query(updateAttendance, [user_id, today], (err) => {
         if (err) console.error("Logout Attendance Error", err);
     });
