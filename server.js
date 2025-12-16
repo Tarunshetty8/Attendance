@@ -109,7 +109,7 @@ app.post('/attendance/sync', (req, res) => {
         ];
 
         // Allow Localhost OR Office Subnet (103.168.82.xxx)
-        const isIpAllowed = ALLOWED_IPS.includes(clientIp) || clientIp.startsWith('103.168.82.');
+        const isIpAllowed = ALLOWED_IPS.includes(clientIp) || clientIp.startsWith('49.37.131.');
 
         // Calculate Today in IST
         const todayDate = new Date();
