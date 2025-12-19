@@ -82,7 +82,40 @@ app.post('/login', (req, res) => {
 app.post('/attendance/sync', (req, res) => {
     const { user_id, device_id } = req.body;
 
-    // Check if Device ID matches
+    // 1. IP CHECK (Prioritized)
+    const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0] : req.connection.remoteAddress;
+    console.log(`Sync Request: User ${user_id} | IP: ${clientIp}`);
+
+    const ALLOWED_IPS = [
+        '::1',
+        '127.0.0.1'
+    ];
+
+    // Allow Localhost OR Office Subnet
+    const isIpAllowed = ALLOWED_IPS.includes(clientIp) || clientIp.startsWith('49.37.129.');
+
+    // Calculate Today in IST
+    const todayDate = new Date();
+    todayDate.setHours(todayDate.getHours() + 5);
+    todayDate.setMinutes(todayDate.getMinutes() + 30);
+    const today = todayDate.toISOString().split('T')[0];
+
+    if (!isIpAllowed) {
+        // --- LOGIC: USER IS ABSENT (Invalid Network) ---
+        // Attempt to close session in DB, but return ABSENT even if DB fails (e.g. network switch)
+        const query = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), status = 'absent' WHERE user_id = ? AND date = ? AND status = 'present'`;
+
+        db.query(query, [user_id, today], (err) => {
+            if (err) {
+                console.warn("DB Error during ABSENT update (Ignoring to ensure UI updates):", err.message);
+            }
+            // Always return ABSENT if network is invalid
+            res.json({ success: true, status: 'ABSENT', message: 'Invalid Network', detected_ip: clientIp });
+        });
+        return; // Stop here
+    }
+
+    // 2. DEVICE CHECK (Only if IP is Valid)
     const deviceCheckQuery = 'SELECT device_id FROM users WHERE id = ?';
     db.query(deviceCheckQuery, [user_id], (err, results) => {
         if (err) {
@@ -99,63 +132,28 @@ app.post('/attendance/sync', (req, res) => {
             return res.json({ success: false, status: 'SESSION_EXPIRED', message: 'Logged in on another device' });
         }
 
-        // Proceed with IP Check (Rest of existing logic)
-        const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0] : req.connection.remoteAddress;
-        console.log(`Sync Request: User ${user_id} | IP: ${clientIp}`);
+        // --- LOGIC: USER IS PRESENT ---
+        // Check the LATEST record for today
+        const checkQuery = `SELECT id, status FROM attendance WHERE user_id = ? AND date = ? ORDER BY entry_time DESC LIMIT 1`;
 
-        const ALLOWED_IPS = [
-            '::1',
-            '127.0.0.1'
-        ];
+        db.query(checkQuery, [user_id, today], (err, results) => {
+            if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
 
-        // Allow Localhost OR Office Subnet (103.168.82.xxx)
-        const isIpAllowed = ALLOWED_IPS.includes(clientIp) || clientIp.startsWith('49.37.129.');
+            const lastRecord = results.length > 0 ? results[0] : null;
 
-        // Calculate Today in IST
-        const todayDate = new Date();
-        todayDate.setHours(todayDate.getHours() + 5);
-        todayDate.setMinutes(todayDate.getMinutes() + 30);
-        const today = todayDate.toISOString().split('T')[0];
-
-        if (isIpAllowed) {
-            // --- LOGIC: USER IS PRESENT ---
-            // Check the LATEST record for today
-            const checkQuery = `SELECT id, status FROM attendance WHERE user_id = ? AND date = ? ORDER BY entry_time DESC LIMIT 1`;
-
-            db.query(checkQuery, [user_id, today], (err, results) => {
-                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
-
-                const lastRecord = results.length > 0 ? results[0] : null;
-
-                if (!lastRecord || lastRecord.status === 'absent') {
-                    // NEW SESSION: Insert new row
-                    const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
-                    db.query(insertQuery, [user_id, today], (err) => {
-                        if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
-                        res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                    });
-                } else {
-                    // EXISTING SESSION: Already present, Just OK (Heartbeat)
-                    // Optionally update a 'last_seen' column if you had one, but for now just confirm logic.
+            if (!lastRecord || lastRecord.status === 'absent') {
+                // NEW SESSION: Insert new row
+                const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
+                db.query(insertQuery, [user_id, today], (err) => {
+                    if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
                     res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                }
-            });
-
-        } else {
-            // --- LOGIC: USER IS ABSENT (Invalid Network) ---
-            // If they have an Open Session ('present'), Close it.
-            const query = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), status = 'absent' WHERE user_id = ? AND date = ? AND status = 'present'`;
-
-            db.query(query, [user_id, today], (err) => {
-                if (err) {
-                    // ... error handling
-                }
-                res.json({ success: true, status: 'ABSENT', message: 'Invalid Network', detected_ip: clientIp });
-            });
-        }
-
-
-    }); // Closing db.query device check
+                });
+            } else {
+                // EXISTING SESSION: Already present, Just OK (Heartbeat)
+                res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+            }
+        });
+    });
 }); // Closing app.post('/attendance/sync')
 
 // Logout
