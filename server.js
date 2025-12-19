@@ -20,26 +20,37 @@ const dbConfig = {
 };
 
 // Use Connection Pool for stability
+// Use Connection Pool for stability
 const db = mysql.createPool(dbConfig);
-const isDbConnected = true; // Pool is always "connected" (manages itself)
+let isDbConnected = false;
 
+// Global Pool Error Handler
 db.on('connection', (connection) => {
-    console.log('DB Connection acquired');
+    // console.log('DB Connection acquired'); // Verbose
 });
-
-db.on('enqueue', () => {
-    console.log('Waiting for available connection slot');
-});
-
-// Test Connection
-db.getConnection((err, connection) => {
-    if (err) {
-        console.error('Initial DB Connection Failed:', err.message);
-    } else {
-        console.log('Connected to MySQL via Pool.');
-        connection.release();
+db.on('error', (err) => {
+    console.error('MySQL Pool Error:', err);
+    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+        isDbConnected = false;
     }
 });
+
+// Heartbeat function to maintain validity of isDbConnected
+function checkDbConnection() {
+    db.query('SELECT 1', (err) => {
+        if (err) {
+            if (isDbConnected) console.error('DB Heartbeat Failed: Connection Lost');
+            isDbConnected = false;
+        } else {
+            if (!isDbConnected) console.log('DB Heartbeat Success: Connection Restored');
+            isDbConnected = true;
+        }
+    });
+}
+
+// Initial Check & Interval
+checkDbConnection();
+setInterval(checkDbConnection, 5000); // Check every 5s
 
 // --- API Endpoints ---
 
