@@ -278,7 +278,6 @@ app.get('/admin/payroll', (req, res) => {
         (SUM(TIMESTAMPDIFF(HOUR, a.entry_time, IFNULL(a.exit_time, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)))) * u.hourly_rate) as total_pay
         FROM attendance a
         JOIN users u ON a.user_id = u.id
-        WHERE a.status = 'present'
         GROUP BY u.id
     `;
     db.query(query, (err, results) => {
