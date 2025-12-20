@@ -155,10 +155,24 @@ app.post('/attendance/sync', (req, res) => {
                     db.query("UPDATE settings SET setting_value = ? WHERE setting_key = 'office_ip'", [clientIp]);
                 }
             } else {
-                // Regular Employee: Must match Office IP
-                // Simple string match. For subnets, we might need more logic, but "Public IP" implies exact match usually.
-                // If officeIp is 0.0.0.0 (uninitialized), nobody can login remotely except Office user.
-                if (clientIp === officeIp) {
+                // Regular Employee: Must match Office IP Subnet
+                // User requested to match 103.168.82.xxx
+                // So we check if clientIp STARTS WITH the officeIp (or a configured prefix)
+                // If officeIp is "103.168.82.", then "103.168.82.127" will match.
+
+                // Ensure officeIp stored in DB is the prefix "103.168.82."
+                // OR we can just check if clientIp starts with "103.168.82." if hardcoded,
+                // But better to respect the DB setting. 
+                // Let's assume the DB will hold "103.168.82." or we normalize it here.
+
+                // Normalized check:
+                // If the stored IP is a full IP (e.g., 103.168.82.127), we extract the subnet.
+                // But the user might want to change dynamically.
+                // Proposed logic: Check if clientIp starts with the 'subnet' part of officeIp.
+
+                const officeSubnet = officeIp.split('.').slice(0, 3).join('.') + '.'; // "103.168.82."
+
+                if (clientIp.startsWith(officeSubnet)) {
                     isIpAllowed = true;
                 }
             }
