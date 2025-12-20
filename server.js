@@ -181,26 +181,24 @@ app.post('/attendance/sync', (req, res) => {
             }
 
             // 5. MARK PRESENT
-            // ATOMIC INSERT: Only insert if no 'present' record exists for this user/date within the last 1 minute
-            // This prevents race conditions better than SELECT-then-INSERT
-            const atomicInsertQuery = `
-                INSERT INTO attendance (user_id, date, entry_time, status)
-                SELECT ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present'
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM attendance 
-                    WHERE user_id = ? 
-                    AND date = ? 
-                    AND status = 'present'
-                    AND entry_time > DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL 1 MINUTE)
-                )
-            `;
+            // SESSION LOGIC: Check if an open session already exists for today
+            const checkSessionQuery = `SELECT id FROM attendance WHERE user_id = ? AND date = ? AND status = 'present' LIMIT 1`;
 
-            db.query(atomicInsertQuery, [user_id, today, user_id, today], (err, results) => {
-                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
+            db.query(checkSessionQuery, [user_id, today], (err, results) => {
+                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
 
-                // If affectedRows == 0, it means the duplicate check failed (record exists) or logic prevented insertion
-                // In that case, we treat it as success (idempotent)
-                res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                if (results.length > 0) {
+                    // CACHE HIT: Session is already active.
+                    // This is a "Monitoring" heartbeat. Do NOT create a new log.
+                    return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                }
+
+                // NO ACTIVE SESSION -> Create one.
+                const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
+                db.query(insertQuery, [user_id, today], (err) => {
+                    if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
+                    res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                });
             });
         });
     });
