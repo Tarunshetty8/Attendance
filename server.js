@@ -303,6 +303,55 @@ app.get('/admin/payroll', (req, res) => {
     });
 });
 
+// Employee: Get Monthly Attendance
+app.post('/api/attendance/monthly', (req, res) => {
+    const { user_id, month, year } = req.body;
+
+    if (!user_id || !month || !year) {
+        return res.status(400).json({ success: false, message: 'Missing parameters' });
+    }
+
+    const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
+    const endDate = `${year}-${month.toString().padStart(2, '0')}-31`; // SQL handles overflow dates gracefully usually, or use LAST_DAY()
+
+    const query = `
+        SELECT date, status 
+        FROM attendance 
+        WHERE user_id = ? 
+        AND date BETWEEN ? AND ?
+    `;
+
+    db.query(query, [user_id, startDate, endDate], (err, results) => {
+        if (err) {
+            console.error('Monthly Attendance Error:', err);
+            return res.json({ success: false, message: 'Database Error' });
+        }
+
+        // Process results
+        let presentCount = 0;
+        let absentCount = 0; // Usually absent isn't logged unless explicit, but let's count explicitly logged ones
+        const attendanceMap = {};
+
+        results.forEach(row => {
+            // Fix timezone issue if date comes back as datetime
+            const d = new Date(row.date);
+            // row.date is usually a JS Date object from mysql2 driver
+            // Format to YYYY-MM-DD local
+            const dateStr = d.toISOString().split('T')[0];
+
+            attendanceMap[dateStr] = row.status;
+            if (row.status === 'present') presentCount++;
+            else if (row.status === 'absent') absentCount++;
+        });
+
+        res.json({
+            success: true,
+            data: attendanceMap,
+            summary: { present: presentCount, absent: absentCount }
+        });
+    });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
