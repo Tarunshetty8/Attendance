@@ -6,7 +6,29 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-app.use('/uploads', express.static('uploads'));
+// app.use('/uploads', express.static('uploads')); // Replaced by DB Blob serve
+app.get('/uploads/:filename', (req, res) => {
+    const filename = req.params.filename;
+    // Query DB for blob
+    // Checks standard DB or Pool
+    const sql = 'SELECT profile_image_blob FROM users WHERE profile_photo = ?';
+    db.query(sql, [filename], (err, results) => {
+        if (err) {
+            console.error('Image Fetch Error:', err);
+            return res.status(500).send('Database Error');
+        }
+        if (results.length > 0 && results[0].profile_image_blob) {
+            const imgBuffer = results[0].profile_image_blob;
+            res.writeHead(200, {
+                'Content-Type': 'image/jpeg', // Assuming JPEG/PNG. Browser detects or we can store mime type.
+                'Content-Length': imgBuffer.length
+            });
+            res.end(imgBuffer);
+        } else {
+            res.status(404).send('Image Not Found');
+        }
+    });
+});
 
 // Database Configuration
 const dbConfig = {
