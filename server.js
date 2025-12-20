@@ -181,40 +181,26 @@ app.post('/attendance/sync', (req, res) => {
             }
 
             // 5. MARK PRESENT
-            // Check for ANY 'present' record within the last 1 minute to prevent duplicates (Debounce)
-            const checkQuery = `
-                SELECT id, status, entry_time 
-                FROM attendance 
-                WHERE user_id = ? 
-                  AND date = ? 
-                  AND status = 'present' 
-                  AND entry_time >= DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL 1 MINUTE)
-                LIMIT 1
+            // ATOMIC INSERT: Only insert if no 'present' record exists for this user/date within the last 1 minute
+            // This prevents race conditions better than SELECT-then-INSERT
+            const atomicInsertQuery = `
+                INSERT INTO attendance (user_id, date, entry_time, status)
+                SELECT ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present'
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM attendance 
+                    WHERE user_id = ? 
+                    AND date = ? 
+                    AND status = 'present'
+                    AND entry_time > DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL 1 MINUTE)
+                )
             `;
 
-            db.query(checkQuery, [user_id, today], (err, results) => {
-                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
+            db.query(atomicInsertQuery, [user_id, today, user_id, today], (err, results) => {
+                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
 
-                if (results.length > 0) {
-                    // CACHE HIT: Already marked present recently
-                    return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                }
-
-                // Double Check: Ensure we don't have multiple open sessions anyway
-                const openSessionQuery = `SELECT id FROM attendance WHERE user_id = ? AND date = ? AND status = 'present' LIMIT 1`;
-                db.query(openSessionQuery, [user_id, today], (err, openResults) => {
-                    if (openResults.length > 0) {
-                        // Session already open
-                        return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                    }
-
-                    // NEW SESSION
-                    const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
-                    db.query(insertQuery, [user_id, today], (err) => {
-                        if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
-                        res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                    });
-                });
+                // If affectedRows == 0, it means the duplicate check failed (record exists) or logic prevented insertion
+                // In that case, we treat it as success (idempotent)
+                res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
             });
         });
     });
