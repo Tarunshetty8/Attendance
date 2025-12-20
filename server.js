@@ -62,8 +62,8 @@ app.post('/login', (req, res) => {
 
     if (!isDbConnected) {
         console.log('Using Mock Login (DB Disconnected)');
-        if (username === 'admin' && password === 'admin123') return res.json({ success: true, role: 'admin', token: 'mock-admin', user: { id: 1, full_name: 'Admin User' } });
-        if (username === 'emp01' && password === 'emp123') return res.json({ success: true, role: 'employee', token: 'mock-emp', user: { id: 2, full_name: 'John Doe' } });
+        if (username === 'admin' && password === 'admin123') return res.json({ success: true, role: 'admin', token: 'mock-admin', user: { id: 1, full_name: 'Admin User', designation: 'Administrator', profile_photo: null } });
+        if (username === 'emp01' && password === 'emp123') return res.json({ success: true, role: 'employee', token: 'mock-emp', user: { id: 2, full_name: 'John Doe', designation: 'Software Engineer', profile_photo: null } });
         return res.status(401).json({ success: false, message: 'Invalid credentials (Mock)' });
     }
 
@@ -72,7 +72,7 @@ app.post('/login', (req, res) => {
         if (err) {
             console.error('Login Query Error:', err);
             // Fallback to mock if query fails (e.g. table missing)
-            if (username === 'emp01' && password === 'emp123') return res.json({ success: true, role: 'employee', token: 'mock-emp', user: { id: 2, full_name: 'John Doe' } });
+            if (username === 'emp01' && password === 'emp123') return res.json({ success: true, role: 'employee', token: 'mock-emp', user: { id: 2, full_name: 'John Doe', designation: 'Software Engineer', profile_photo: null } });
             return res.status(500).json({ error: err.message || 'Database error' });
         }
         if (results.length > 0) {
@@ -194,7 +194,7 @@ app.post('/attendance/logout', (req, res) => {
 
 // Admin: Create New User
 app.post('/admin/users', (req, res) => {
-    const { username, password, full_name, hourly_rate } = req.body;
+    const { username, password, full_name, hourly_rate, designation, profile_photo } = req.body;
 
     if (!username || !password || !full_name) {
         return res.status(400).json({ success: false, message: 'Missing fields' });
@@ -204,8 +204,8 @@ app.post('/admin/users', (req, res) => {
         return res.json({ success: true, message: 'MOCK: Employee created', id: 999 });
     }
 
-    const query = 'INSERT INTO users (username, password_hash, role, full_name, hourly_rate) VALUES (?, ?, "employee", ?, ?)';
-    db.query(query, [username, password, full_name, hourly_rate || 0], (err, result) => {
+    const query = 'INSERT INTO users (username, password_hash, role, full_name, hourly_rate, designation, profile_photo) VALUES (?, ?, "employee", ?, ?, ?, ?)';
+    db.query(query, [username, password, full_name, hourly_rate || 0, designation || 'Employee', profile_photo || null], (err, result) => {
         if (err) {
             if (err.code === 'ER_DUP_ENTRY') {
                 return res.status(400).json({ success: false, message: 'Username already exists' });
