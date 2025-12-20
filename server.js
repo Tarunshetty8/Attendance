@@ -115,18 +115,8 @@ app.post('/login', (req, res) => {
 // Sync Attendance (New State-Sync Logic)
 app.post('/attendance/sync', (req, res) => {
     const { user_id, device_id } = req.body;
-
-    // 1. IP CHECK (Prioritized)
     const clientIp = req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0] : req.connection.remoteAddress;
     console.log(`Sync Request: User ${user_id} | IP: ${clientIp}`);
-
-    const ALLOWED_IPS = [
-        '::1',
-        '127.0.0.1'
-    ];
-
-    // Allow Localhost OR Office Subnet
-    const isIpAllowed = ALLOWED_IPS.includes(clientIp) || clientIp.startsWith('103.168.82.');
 
     // Calculate Today in IST
     const todayDate = new Date();
@@ -134,58 +124,81 @@ app.post('/attendance/sync', (req, res) => {
     todayDate.setMinutes(todayDate.getMinutes() + 30);
     const today = todayDate.toISOString().split('T')[0];
 
-    if (!isIpAllowed) {
-        // --- LOGIC: USER IS ABSENT (Invalid Network) ---
-        // Attempt to close session in DB, but return ABSENT even if DB fails (e.g. network switch)
-        const query = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), status = 'absent' WHERE user_id = ? AND date = ? AND status = 'present'`;
+    // 1. Get User Details & Global Settings
+    const userQuery = 'SELECT device_id, designation FROM users WHERE id = ?';
+    db.query(userQuery, [user_id], (err, userResults) => {
+        if (err) return res.json({ success: false, status: 'ERROR', message: `DB Error: ${err.message}` });
+        if (userResults.length === 0) return res.json({ success: false, status: 'ERROR', message: 'User not found' });
 
-        db.query(query, [user_id, today], (err) => {
-            if (err) {
-                console.warn("DB Error during ABSENT update (Ignoring to ensure UI updates):", err.message);
+        const user = userResults[0];
+        const isOfficeUser = user.designation && user.designation.toLowerCase() === 'office';
+
+        // 2. Resolve Allowed IP
+        const settingsQuery = "SELECT setting_value FROM settings WHERE setting_key = 'office_ip'";
+        db.query(settingsQuery, (err, settingsResults) => {
+            let officeIp = '0.0.0.0'; // Default
+            if (!err && settingsResults.length > 0) {
+                officeIp = settingsResults[0].setting_value;
             }
-            // Always return ABSENT if network is invalid
-            res.json({ success: true, status: 'ABSENT', message: 'Invalid Network', detected_ip: clientIp });
-        });
-        return; // Stop here
-    }
 
-    // 2. DEVICE CHECK (Only if IP is Valid)
-    const deviceCheckQuery = 'SELECT device_id FROM users WHERE id = ?';
-    db.query(deviceCheckQuery, [user_id], (err, results) => {
-        if (err) {
-            return res.json({ success: false, status: 'ERROR', message: `DB Error: ${err.message}` });
-        }
-        if (results.length === 0) {
-            return res.json({ success: false, status: 'ERROR', message: 'User not found' });
-        }
+            // 3. Determine IP Validity
+            let isIpAllowed = false;
+            const isLocalhost = clientIp === '::1' || clientIp === '127.0.0.1';
 
-        const storedDeviceId = results[0].device_id;
-        // If stored ID exists and doesn't match current request -> Session Expired (Logged in elsewhere)
-        if (storedDeviceId && storedDeviceId !== device_id) {
-            console.warn(`Session conflict for User ${user_id}. Expected: ${storedDeviceId}, Got: ${device_id}`);
-            return res.json({ success: false, status: 'SESSION_EXPIRED', message: 'Logged in on another device' });
-        }
-
-        // --- LOGIC: USER IS PRESENT ---
-        // Check the LATEST record for today
-        const checkQuery = `SELECT id, status FROM attendance WHERE user_id = ? AND date = ? ORDER BY entry_time DESC LIMIT 1`;
-
-        db.query(checkQuery, [user_id, today], (err, results) => {
-            if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
-
-            const lastRecord = results.length > 0 ? results[0] : null;
-
-            if (!lastRecord || lastRecord.status === 'absent') {
-                // NEW SESSION: Insert new row
-                const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
-                db.query(insertQuery, [user_id, today], (err) => {
-                    if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
-                    res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                });
+            if (isLocalhost) {
+                isIpAllowed = true;
+            } else if (isOfficeUser) {
+                // Office User: Always Allowed + Updates the Office IP
+                isIpAllowed = true;
+                if (clientIp !== officeIp) {
+                    console.log(`Updating Office IP from ${officeIp} to ${clientIp}`);
+                    db.query("UPDATE settings SET setting_value = ? WHERE setting_key = 'office_ip'", [clientIp]);
+                }
             } else {
-                // EXISTING SESSION: Already present, Just OK (Heartbeat)
-                res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                // Regular Employee: Must match Office IP
+                // Simple string match. For subnets, we might need more logic, but "Public IP" implies exact match usually.
+                // If officeIp is 0.0.0.0 (uninitialized), nobody can login remotely except Office user.
+                if (clientIp === officeIp) {
+                    isIpAllowed = true;
+                }
             }
+
+            if (!isIpAllowed) {
+                // --- LOGIC: USER IS ABSENT (Invalid Network) ---
+                const query = `UPDATE attendance SET exit_time = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), status = 'absent' WHERE user_id = ? AND date = ? AND status = 'present'`;
+                db.query(query, [user_id, today], (err) => {
+                    if (err) console.warn("DB Error during ABSENT update:", err.message);
+                    res.json({ success: true, status: 'ABSENT', message: 'Invalid Network', detected_ip: clientIp, office_ip: officeIp });
+                });
+                return;
+            }
+
+            // 4. SESSION CHECK (Device ID)
+            const storedDeviceId = user.device_id;
+            if (storedDeviceId && storedDeviceId !== device_id) {
+                console.warn(`Session conflict for User ${user_id}.`);
+                return res.json({ success: false, status: 'SESSION_EXPIRED', message: 'Logged in on another device' });
+            }
+
+            // 5. MARK PRESENT
+            const checkQuery = `SELECT id, status FROM attendance WHERE user_id = ? AND date = ? ORDER BY entry_time DESC LIMIT 1`;
+            db.query(checkQuery, [user_id, today], (err, results) => {
+                if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
+
+                const lastRecord = results.length > 0 ? results[0] : null;
+
+                if (!lastRecord || lastRecord.status === 'absent') {
+                    // NEW SESSION
+                    const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
+                    db.query(insertQuery, [user_id, today], (err) => {
+                        if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
+                        res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                    });
+                } else {
+                    // EXISTING SESSION
+                    res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                }
+            });
         });
     });
 }); // Closing app.post('/attendance/sync')
