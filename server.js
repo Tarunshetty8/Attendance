@@ -274,8 +274,8 @@ app.get('/admin/payroll', (req, res) => {
 
     const query = `
         SELECT u.full_name, u.hourly_rate, 
-        SUM(TIMESTAMPDIFF(HOUR, a.entry_time, IFNULL(a.exit_time, NOW()))) as total_hours,
-        (SUM(TIMESTAMPDIFF(HOUR, a.entry_time, IFNULL(a.exit_time, NOW()))) * u.hourly_rate) as total_pay
+        SUM(TIMESTAMPDIFF(HOUR, a.entry_time, IFNULL(a.exit_time, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)))) as total_hours,
+        (SUM(TIMESTAMPDIFF(HOUR, a.entry_time, IFNULL(a.exit_time, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)))) * u.hourly_rate) as total_pay
         FROM attendance a
         JOIN users u ON a.user_id = u.id
         WHERE a.status = 'present'
