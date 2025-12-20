@@ -203,12 +203,18 @@ app.post('/attendance/sync', (req, res) => {
 
                 if (results.length > 0) {
                     // CACHE HIT: Session is already active.
-                    // This is a "Monitoring" heartbeat. Do NOT create a new log.
+                    // UPDATE HEARTBEAT: Update last_seen
+                    // To avoid excessive writes, we could check if last_seen is old, but for now we update every time (1s interval from client)
+                    // Optimization: Update every 30s? No, client polls every 1s. Let's debounce in DB?
+                    // Let's just update. MySQL handles it fine for this scale.
+                    const updateHeartbeat = `UPDATE attendance SET last_seen = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) WHERE id = ?`;
+                    db.query(updateHeartbeat, [results[0].id]);
+
                     return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
                 }
 
                 // NO ACTIVE SESSION -> Create one.
-                const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
+                const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, last_seen, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
                 db.query(insertQuery, [user_id, today], (err) => {
                     if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
                     res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
@@ -370,3 +376,39 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+
+// --- TIMEOUT WORKER ---
+// Runs every 1 minute to check for inactive sessions (> 5 mins)
+setInterval(() => {
+    if (!isDbConnected) return;
+
+    // Calculate Today in IST
+    const todayDate = new Date();
+    todayDate.setHours(todayDate.getHours() + 5);
+    todayDate.setMinutes(todayDate.getMinutes() + 30);
+    const today = todayDate.toISOString().split('T')[0];
+
+    // Query: Find 'present' sessions where last_seen is older than 5 minutes
+    // We compare last_seen with (NOW - 5 minutes)
+    // DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) is "Current IST Time"
+
+    // Logic: UPDATE attendance SET status='absent', exit_time=last_seen 
+    // WHERE status='present' AND date=today AND last_seen < (Current IST - 5 mins)
+
+    const timeoutQuery = `
+        UPDATE attendance 
+        SET status = 'absent', exit_time = last_seen
+        WHERE status = 'present' 
+        AND date = ? 
+        AND last_seen < DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL 5 MINUTE)
+    `;
+
+    db.query(timeoutQuery, [today], (err, result) => {
+        if (err) {
+            console.error('Timeout Worker Error:', err);
+        } else if (result.changedRows > 0) {
+            console.log(`Timeout Worker: Marked ${result.changedRows} users as ABSENT due to inactivity.`);
+        }
+    });
+
+}, 60000); // 60 seconds interval
