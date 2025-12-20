@@ -181,23 +181,40 @@ app.post('/attendance/sync', (req, res) => {
             }
 
             // 5. MARK PRESENT
-            const checkQuery = `SELECT id, status FROM attendance WHERE user_id = ? AND date = ? ORDER BY entry_time DESC LIMIT 1`;
+            // Check for ANY 'present' record within the last 1 minute to prevent duplicates (Debounce)
+            const checkQuery = `
+                SELECT id, status, entry_time 
+                FROM attendance 
+                WHERE user_id = ? 
+                  AND date = ? 
+                  AND status = 'present' 
+                  AND entry_time >= DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL 1 MINUTE)
+                LIMIT 1
+            `;
+
             db.query(checkQuery, [user_id, today], (err, results) => {
                 if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Error' });
 
-                const lastRecord = results.length > 0 ? results[0] : null;
+                if (results.length > 0) {
+                    // CACHE HIT: Already marked present recently
+                    return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                }
 
-                if (!lastRecord || lastRecord.status === 'absent') {
+                // Double Check: Ensure we don't have multiple open sessions anyway
+                const openSessionQuery = `SELECT id FROM attendance WHERE user_id = ? AND date = ? AND status = 'present' LIMIT 1`;
+                db.query(openSessionQuery, [user_id, today], (err, openResults) => {
+                    if (openResults.length > 0) {
+                        // Session already open
+                        return res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
+                    }
+
                     // NEW SESSION
                     const insertQuery = `INSERT INTO attendance (user_id, date, entry_time, status) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), 'present')`;
                     db.query(insertQuery, [user_id, today], (err) => {
                         if (err) return res.json({ success: false, status: 'ERROR', message: 'DB Insert Failed' });
                         res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
                     });
-                } else {
-                    // EXISTING SESSION
-                    res.json({ success: true, status: 'PRESENT', detected_ip: clientIp });
-                }
+                });
             });
         });
     });
